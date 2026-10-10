@@ -4,24 +4,29 @@
 ------------------------------------------------------------
 
 📌 功能
-   小浣熊每日积分发放（三段式，成功判据是账单核对而不是某一步 200）：
-   1. POST /api/web/desktop/v1/login/points/grant   一次性桌面登录奖励（失败不阻断）
-   2. GET  /api/web/office/v3/setting_info          每日发放触发器（按天幂等）
-   3. GET  /api/web/points/v1/bills                 拉账单，今日 points>0 才算签到成功
+   小浣熊每日积分任务（成功判据是账单核对而不是某一步 200）：
+   1. GET  /api/web/office/v3/setting_info   每日积分发放触发器（按天幂等）
+   2. GET  /api/web/points/v1/bills          拉账单，今日 points>0 才算签到成功
+      「今日」固定按北京时间（UTC+8）切日，不跟随宿主机时区
+   3. 新手任务：首次电脑端 / 手机端登录奖励（各一次性，名义 3000 积分）
+      - 两条端点互不共享额度：桌面端领过的账号，手机端那条照样能领
+      - 领取结果记本机台账（raccoon_onboarding.json），结算过的不再重复探测 / 提示
 
 🔑 环境变量
    RACCOON_TOKENS   【必填】多账号用换行或 & 分隔：
        token
        备注|token
      token 为 xiaohuanxiong.com 的登录 JWT（带不带 Bearer 前缀都行）
+   RACCOON_STATE_FILE   可选，新手奖励台账文件路径（默认脚本同目录）
 
    推送通道（均可选）：PUSHPLUS_TOKEN / BARK_URL / WECOM_WEBHOOK / DINGTALK_WEBHOOK / DINGTALK_SECRET
 
 ⌨️ 命令
-   python raccoon_daily.py              正常签到
-   python raccoon_daily.py --query      只查今日入账，不触发发放
-   python raccoon_daily.py --only 2     只跑第 2 个账号
-   python raccoon_daily.py --no-notify  不推送
+   python raccoon_daily.py                    正常签到 + 自动领取新手奖励
+   python raccoon_daily.py --query            只查今日入账，不触发发放、不动新手奖励
+   python raccoon_daily.py --skip-onboarding  只做每日签到，不碰新手奖励
+   python raccoon_daily.py --only 2           只跑第 2 个账号
+   python raccoon_daily.py --no-notify        不推送
 
 📄 依赖：requests
 """
@@ -32,6 +37,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -45,12 +51,23 @@ except Exception:
 
 ORIGIN = os.environ.get("RACCOON_MAIN_SITE_URL", "").strip() or "https://xiaohuanxiong.com"
 GRANT_PATH = "/api/web/desktop/v1/login/points/grant"
+MOBILE_GRANT_PATH = "/api/web/mobile/v1/login/points/grant"
 SETTINGS_PATH = "/api/web/office/v3/setting_info"
 BILLS_PATH = "/api/web/points/v1/bills?paging.limit=20&paging.offset=0"
 
 ONLY = None
 QUERY_ONLY = False
 NO_NOTIFY = False
+ONBOARDING = True
+
+BEIJING = timezone(timedelta(hours=8))
+ONBOARDING_NOMINAL_POINTS = 3000
+ONBOARDING_TASKS = (
+    {"key": "desktop_login_grant", "title": "首次电脑端登录奖励",
+     "path": GRANT_PATH, "mobile": False},
+    {"key": "mobile_login_grant", "title": "首次手机端登录奖励",
+     "path": MOBILE_GRANT_PATH, "mobile": True},
+)
 
 
 def log(msg):
@@ -114,16 +131,6 @@ def desktop_headers(token):
 
 # ---------- 上游协议 ----------
 
-def desktop_grant(token):
-    """一次性桌面登录奖励；失败不算签到失败，只作为附加信息。"""
-    try:
-        response = request("POST", ORIGIN + GRANT_PATH, headers=desktop_headers(token),
-                           body={}, timeout=20, retries=1)
-        data = json_of(response)
-        return {"granted": data.get("granted") is True}
-    except Exception as error:
-        return {"granted": False, "error": str(error)}
-
 
 def trigger_daily(token):
     """GET setting_info 触发服务端按天发放；返回发放弹窗/提示原文。"""
@@ -134,7 +141,7 @@ def trigger_daily(token):
         raise RuntimeError("登录状态失效，重新登录一下吧该账号")
     if response.status_code != 200:
         raise RuntimeError("setting_info 返回 HTTP %s" % response.status_code)
-    data = json_of(response)
+    data = unwrap_api(json_of(response))
     return {
         "popups": data.get("point_grant_popups"),
         "toast": data.get("point_grant_toast"),
@@ -148,8 +155,8 @@ def bills_today(token):
         raise RuntimeError("登录状态失效，重新登录一下吧该账号")
     if response.status_code != 200:
         raise RuntimeError("账单接口返回 HTTP %s" % response.status_code)
-    data = json_of(response)
-    today = time.strftime("%Y-%m-%d")
+    data = unwrap_api(json_of(response))
+    today = beijing_today()
     grants = []
     for item in data.get("items") or []:
         if not isinstance(item, dict):
@@ -169,14 +176,6 @@ def bills_today(token):
 
 
 def do_checkin(account):
-    desktop = {"granted": False}
-    if not QUERY_ONLY:
-        desktop = desktop_grant(account["token"])
-        if desktop.get("granted"):
-            log("   🖥️ 桌面登录奖励已发放")
-        elif desktop.get("error"):
-            log("   ℹ️ 桌面登录奖励未领取（老账号属正常）")
-
     settings = {}
     if not QUERY_ONLY:
         settings = trigger_daily(account["token"])
@@ -186,13 +185,17 @@ def do_checkin(account):
     grants = bills_today(account["token"])
     total = sum(item["points"] for item in grants)
     parts = []
-    if desktop.get("granted"):
-        parts.append("桌面登录奖励已发放")
     if total > 0:
         parts.append("今日积分 +%d（%s）" % (total, "，".join(
             "%s+%d" % (item["name"], item["points"]) for item in grants[:3])))
     else:
         parts.append("今日未见积分入账（可能已领取）")
+
+    if not QUERY_ONLY and ONBOARDING:
+        try:
+            parts.extend(claim_onboarding(account))
+        except Exception as error:
+            parts.append("新手奖励领取异常：%s" % error)
     return total > 0, "；".join(parts)
 
 
@@ -308,13 +311,133 @@ def parse_accounts(raw):
     return accounts
 
 
+def unwrap_api(payload):
+    """服务端统一包 {code, data}：code 非 0 抛错，data 非空取 data。"""
+    if not isinstance(payload, dict):
+        return {}
+    code = payload.get("code")
+    if isinstance(code, int) and code != 0:
+        message = payload.get("message") or payload.get("msg") or ("返回异常 code=%s" % code)
+        raise RuntimeError(str(message))
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return data
+    return payload
+
+
+def beijing_today():
+    """北京时间（UTC+8）的今天；上游自然日以北京零点切分。"""
+    return datetime.now(BEIJING).strftime("%Y-%m-%d")
+
+
+def state_file_path():
+    override = os.environ.get("RACCOON_STATE_FILE", "").strip()
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "raccoon_onboarding.json")
+
+
+def account_state_key(token):
+    """用 token 的哈希做台账键，文件里不落 token 明文。"""
+    return hashlib.sha256(strip_bearer(token).encode("utf-8")).hexdigest()[:16]
+
+
+def load_onboarding_state():
+    try:
+        with open(state_file_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict) and isinstance(data.get("accounts"), dict):
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "accounts": {}}
+
+
+def save_onboarding_state(state):
+    path = state_file_path()
+    try:
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder)
+        temp = path + ".tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(temp, path)
+        return True
+    except Exception as error:
+        log("   ⚠️ 新手奖励台账写入失败: %s" % error)
+        return False
+
+
+def mobile_headers(token):
+    return {
+        "Authorization": "Bearer %s" % strip_bearer(token),
+        "X-Client-Platform": "app-android",
+        "X-Client-Version": "v1.0.3",
+        "Accept": "application/json",
+    }
+
+
+def grant_login_points(token, mobile=False):
+    """打一次首登奖励端点（幂等）；两端只差客户端身份头与路径。"""
+    headers = mobile_headers(token) if mobile else desktop_headers(token)
+    path = MOBILE_GRANT_PATH if mobile else GRANT_PATH
+    response = request("POST", ORIGIN + path, headers=headers, body={}, timeout=20, retries=1)
+    if response.status_code == 401:
+        raise RuntimeError("登录状态失效，重新登录一下吧该账号")
+    if response.status_code != 200:
+        raise RuntimeError("登录奖励接口返回 HTTP %s" % response.status_code)
+    return unwrap_api(json_of(response))
+
+
+def claim_onboarding(account):
+    """领取两条一次性登录奖励；台账里结算过的不发请求也不提示。"""
+    state = load_onboarding_state()
+    key = account_state_key(account["token"])
+    ledger = state["accounts"].get(key)
+    if not isinstance(ledger, dict):
+        ledger = {}
+    messages = []
+    changed = False
+    for task in ONBOARDING_TASKS:
+        if ledger.get(task["key"]):
+            continue
+        try:
+            data = grant_login_points(account["token"], mobile=task["mobile"])
+        except Exception as error:
+            messages.append("%s领取失败（%s）" % (task["title"], error))
+            continue
+        granted = data.get("granted") is True
+        ledger[task["key"]] = int(time.time() * 1000)
+        changed = True
+        if granted:
+            points = 0
+            popup = data.get("popup")
+            if isinstance(popup, dict):
+                try:
+                    points = int(popup.get("points") or 0)
+                except Exception:
+                    points = 0
+            if points <= 0:
+                points = ONBOARDING_NOMINAL_POINTS
+            messages.append("%s +%d" % (task["title"], points))
+        else:
+            log("   ℹ️ %s此前已发放，跳过重复领取" % task["title"])
+    if changed:
+        state["accounts"][key] = ledger
+        save_onboarding_state(state)
+    return messages
+
+
 def main():
-    global ONLY, QUERY_ONLY, NO_NOTIFY
+    global ONLY, QUERY_ONLY, NO_NOTIFY, ONBOARDING
     args = sys.argv[1:]
     if "--query" in args:
         QUERY_ONLY = True
     if "--no-notify" in args:
         NO_NOTIFY = True
+    if "--skip-onboarding" in args:
+        ONBOARDING = False
     if "--only" in args:
         try:
             ONLY = int(args[args.index("--only") + 1])
