@@ -2,7 +2,7 @@
 
 # 🐻 Raccoon Daily
 
-**小浣熊每日积分 · 网页授权登录 · 单文件青龙脚本 · 多账号**
+**小浣熊每日积分 · 微信扫码登录 · 单文件青龙脚本 · 多账号**
 
 <img src="https://img.shields.io/github/v/release/L0NE-6/Raccoon-Daily?style=flat-square&label=Release&color=2ea44f" />
 <img src="https://img.shields.io/github/stars/L0NE-6/Raccoon-Daily?style=flat-square&label=Stars&color=FFC75F" />
@@ -31,14 +31,14 @@
 - ✅ **签到 + 新手奖励**：每日发放、账单核对，另自动补领首次电脑端 / 手机端登录奖励（各一次性，本机台账防重复）
 - 🧾 **账单为准**：只有账单里出现今日入账才算成功，避免假成功
 - 🕐 **北京时间口径**：账单「今日入账」按 UTC+8 切日，非中国时区部署也一致
-- 🔐 **网页授权登录**：浏览器登录一次，回填回调地址换 Token
+- 🔐 **微信扫码登录**：电脑上出二维码，微信扫一次即得 Token + 续期凭据（旧版网页授权保留）
 - 👥 **多账号** + 📢 **多渠道推送** + 🐧 **青龙 / Actions 双部署**
 
 ## 📦 文件说明
 
 | 文件 | 作用 |
 |---|---|
-| `raccoon_login.py` | 网页授权登录，回填回调地址换 Token |
+| `raccoon_login.py` | 微信扫码登录（旧版网页授权用 `--web`） |
 | `raccoon_daily.py` | 每日积分（多账号、推送） |
 
 ## ⬇️ 下载
@@ -78,20 +78,14 @@
 ## 🔑 获取 Token
 
 ```bash
-python raccoon_login.py
+python raccoon_login.py            # 微信扫码（推荐）
+python raccoon_login.py --web      # 旧版网页授权（粘贴回调地址）
 ```
 
-浏览器登录成功后会跳转到：
+- **扫码模式**：终端会显示二维码（需可选依赖 `pip install qrcode`），用微信扫一扫登录「商汤小浣熊」；也可以在命令后加 `--png qr.png` 把二维码存成图片再扫。
+- **成功后输出一行 `备注|token|refresh_token`**，整行填进 `RACCOON_TOKENS` 即可 —— 带 `refresh_token` 才会自动续期（access 约 2~3 小时有效；refresh 约 30 天且会轮换，脚本自动落盘）。
 
-```text
-office-raccoon://auth/callback?code=...&state=...
-```
-
-把这个完整地址粘贴回终端，工具校验 `state` 后用授权码换 Token，输出一行 `备注|token`，粘贴进 `RACCOON_TOKENS`。
-
-> 如果浏览器提示无法打开 `office-raccoon://` 协议，直接复制地址栏里的完整地址即可。
-
-**备选方式**：开发者工具 Network 面板找登录跳转的 302，复制 `Location` 里的 `office-raccoon://…` 地址。
+> **旧版网页授权（`--web`）**：浏览器登录后把跳转到的 `office-raccoon://auth/callback?...` 完整地址粘贴回终端（若提示无法打开协议，直接复制地址栏即可）。
 
 ## 🧩 环境变量（支持多账号）
 
@@ -100,7 +94,8 @@ office-raccoon://auth/callback?code=...&state=...
 | 环境变量 | 单条格式 | 说明 |
 |---|---|---|
 | `RACCOON_STATE_FILE` | 文件路径（可选） | 新手奖励台账，默认脚本同目录 `raccoon_onboarding.json` |
-| `RACCOON_TOKENS` | `token` / `备注\|token` | 多账号换行或 `&` |
+| `RACCOON_TOKEN_FILE` | 文件路径（可选） | 续期缓存，默认脚本同目录 `raccoon_tokens.json` |
+| `RACCOON_TOKENS` | `token` / `备注\|token` / `备注\|token\|refresh_token` | 多账号换行或 `&`；**带 refresh_token 才能自动续期** |
 
 ## ⌨️ 命令行参数
 
@@ -123,7 +118,8 @@ office-raccoon://auth/callback?code=...&state=...
 
 | 文件 | 内容 | 是否提交 |
 |---|---|---|
-| `（无缓存文件）` | 运行不生成任何本地文件 | — |
+| `raccoon_tokens.json` | 续期缓存（access / refresh / 更新时间，按账号备注+序号索引） | ❌ 已 gitignore |
+| `raccoon_onboarding.json` | 新手奖励台账（只存 token 哈希） | ❌ 已 gitignore |
 
 > 以上文件都包含账号凭据，已在 `.gitignore` 中排除，**不要手动提交**。
 
@@ -131,7 +127,7 @@ office-raccoon://auth/callback?code=...&state=...
 
 - **提示「今日未见积分入账」？** 可能是今天已经领过，或上游账单延迟；`--query` 可以只查不领。
 - **授权码失效？** 授权码一次性，拿到回调地址后尽快粘贴，过期就重新发起。
-- **Token 会过期吗？** 会，过期后重新跑登录工具即可。
+- **Token 会过期吗？** access 约 2~3 小时有效。带 `refresh_token`（新版登录工具默认输出）时脚本会自动续期、轮换结果自动落盘；没带的话过期后需重新跑登录工具。
 
 ## 📁 目录结构
 

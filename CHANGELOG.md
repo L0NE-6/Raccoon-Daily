@@ -1,5 +1,12 @@
 # 更新日志
 
+## v1.0.3（2026-10-16）
+
+- 适配小浣熊**新版登录**（官方客户端 v1.0.35）：登录工具默认改为**微信扫码**（本地生成 code → 商汤落地页 → `login_with_qrcode_code` 轮询换取登录态），旧版网页授权保留为 `--web`。
+- 新增：**登录态自动续期** —— `RACCOON_TOKENS` 支持 `备注|token|refresh_token`；access 约 2~3 小时有效，脚本临期自动用 refresh_token 换新，refresh 轮换结果落盘 `raccoon_tokens.json`（防丢失）。
+- 更新：桌面端身份头对齐 v1.0.35（`X-Client-Version`）；接口返回 401 / 业务码 200003 时自动续期并重试一次。
+- 说明：只填 token（旧格式）仍可用，但过期后需重新登录；建议用新登录工具重取一行带 refresh_token 的。
+
 ## v1.0.2（2026-10-10）
 
 - 新增：新手任务自动领取首次电脑端 / 手机端登录奖励（各一次性，名义各 3000 积分）；领取结果记本机台账 `raccoon_onboarding.json`（只存 token 哈希，不落明文），结算过的账号不再重复探测，`--skip-onboarding` 可关闭。

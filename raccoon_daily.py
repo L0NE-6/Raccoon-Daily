@@ -16,7 +16,9 @@
    RACCOON_TOKENS   【必填】多账号用换行或 & 分隔：
        token
        备注|token
+       备注|token|refresh_token   ← 推荐；access 只活 2~3 小时，带 RT 才能自动续期
      token 为 xiaohuanxiong.com 的登录 JWT（带不带 Bearer 前缀都行）
+   RACCOON_TOKEN_FILE   可选，续期缓存文件路径（默认脚本同目录 raccoon_tokens.json）
    RACCOON_STATE_FILE   可选，新手奖励台账文件路径（默认脚本同目录）
 
    推送通道（均可选）：PUSHPLUS_TOKEN / BARK_URL / WECOM_WEBHOOK / DINGTALK_WEBHOOK / DINGTALK_SECRET
@@ -54,6 +56,10 @@ GRANT_PATH = "/api/web/desktop/v1/login/points/grant"
 MOBILE_GRANT_PATH = "/api/web/mobile/v1/login/points/grant"
 SETTINGS_PATH = "/api/web/office/v3/setting_info"
 BILLS_PATH = "/api/web/points/v1/bills?paging.limit=20&paging.offset=0"
+REFRESH_PATH = "/api/web/auth/v1/refresh"
+CLIENT_VERSION = "v1.0.35"
+REFRESH_LEAD_SECONDS = 300
+TOKEN_STORE_NAME = "raccoon_tokens.json"
 
 ONLY = None
 QUERY_ONLY = False
@@ -97,6 +103,13 @@ def strip_bearer(token):
     return token
 
 
+def first_text(*values):
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def request(method, url, headers=None, body=None, timeout=20, retries=3):
     last = None
     for attempt in range(retries):
@@ -124,7 +137,7 @@ def desktop_headers(token):
     return {
         "Authorization": "Bearer %s" % strip_bearer(token),
         "X-Client-Platform": "desktop-windows",
-        "X-Client-Version": "v1.0.0",
+        "X-Client-Version": CLIENT_VERSION,
         "Accept": "application/json",
     }
 
@@ -137,11 +150,12 @@ def trigger_daily(token):
     headers = desktop_headers(token)
     headers["X-Raccoon-Language"] = "zh"
     response = request("GET", ORIGIN + SETTINGS_PATH, headers=headers)
-    if response.status_code == 401:
-        raise RuntimeError("登录状态失效，重新登录一下吧该账号")
+    payload = json_of(response)
+    if response.status_code in (401, 403) or payload.get("code") == 200003:
+        raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
     if response.status_code != 200:
         raise RuntimeError("setting_info 返回 HTTP %s" % response.status_code)
-    data = unwrap_api(json_of(response))
+    data = unwrap_api(payload)
     return {
         "popups": data.get("point_grant_popups"),
         "toast": data.get("point_grant_toast"),
@@ -151,11 +165,12 @@ def trigger_daily(token):
 def bills_today(token):
     """拉账单，汇总本地今天且 points>0 的入账。"""
     response = request("GET", ORIGIN + BILLS_PATH, headers=desktop_headers(token), timeout=30)
-    if response.status_code == 401:
-        raise RuntimeError("登录状态失效，重新登录一下吧该账号")
+    payload = json_of(response)
+    if response.status_code in (401, 403) or payload.get("code") == 200003:
+        raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
     if response.status_code != 200:
         raise RuntimeError("账单接口返回 HTTP %s" % response.status_code)
-    data = unwrap_api(json_of(response))
+    data = unwrap_api(payload)
     today = beijing_today()
     grants = []
     for item in data.get("items") or []:
@@ -178,11 +193,11 @@ def bills_today(token):
 def do_checkin(account):
     settings = {}
     if not QUERY_ONLY:
-        settings = trigger_daily(account["token"])
+        settings = call_with_auth(account, lambda acc: trigger_daily(acc["token"]))
         if settings.get("toast") or settings.get("popups"):
             log("   🎁 上游发放提示: %s" % json.dumps(settings, ensure_ascii=False)[:160])
 
-    grants = bills_today(account["token"])
+    grants = call_with_auth(account, lambda acc: bills_today(acc["token"]))
     total = sum(item["points"] for item in grants)
     parts = []
     if total > 0:
@@ -301,13 +316,18 @@ def parse_accounts(raw):
     accounts = []
     for index, line in enumerate(split_accounts(raw), 1):
         parts = [part.strip() for part in line.split("|")]
-        if len(parts) >= 2:
-            note, token = parts[0], parts[1]
+        if len(parts) >= 3:
+            note, token, refresh = parts[0], parts[1], parts[2]
+        elif len(parts) == 2:
+            note, token, refresh = parts[0], parts[1], ""
         else:
-            note, token = "账号%d" % index, parts[0]
+            note, token, refresh = "账号%d" % index, parts[0], ""
         token = strip_bearer(token)
         if token:
-            accounts.append({"note": note or ("账号%d" % index), "token": token})
+            account = {"note": note or ("账号%d" % index), "token": token,
+                       "refresh": strip_bearer(refresh)}
+            account["_key"] = account_store_key(account, index)
+            accounts.append(account)
     return accounts
 
 
@@ -340,6 +360,144 @@ def state_file_path():
 def account_state_key(token):
     """用 token 的哈希做台账键，文件里不落 token 明文。"""
     return hashlib.sha256(strip_bearer(token).encode("utf-8")).hexdigest()[:16]
+
+
+class AuthExpired(RuntimeError):
+    """登录态失效（HTTP 401 / 业务码 200003），可用 refresh_token 尝试续期。"""
+
+
+def token_store_path():
+    override = os.environ.get("RACCOON_TOKEN_FILE", "").strip()
+    if override:
+        return override
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), TOKEN_STORE_NAME)
+
+
+def load_token_store():
+    try:
+        with open(token_store_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict) and isinstance(data.get("accounts"), dict):
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "accounts": {}}
+
+
+def save_token_store(state):
+    path = token_store_path()
+    try:
+        folder = os.path.dirname(os.path.abspath(path))
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder)
+        temp = path + ".tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(temp, path)
+        return True
+    except Exception as error:
+        log("   ⚠️ 续期缓存写入失败: %s" % error)
+        return False
+
+
+def jwt_exp(token):
+    """JWT 的 exp（秒）；读不到返回 0。"""
+    try:
+        parts = strip_bearer(token).split(".")
+        pad = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(pad))
+        exp = payload.get("exp")
+        if isinstance(exp, (int, float)):
+            return float(exp)
+        if isinstance(exp, str) and exp.strip():
+            return float(exp.strip())
+    except Exception:
+        pass
+    return 0.0
+
+
+def account_store_key(account, index):
+    """续期缓存的稳定键：备注 + 序号（token 每次续期都会变，不能拿它当键）。"""
+    raw = "%s#%d" % (account.get("note") or "", index or 0)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def refresh_candidates(account):
+    """可尝试的 refresh_token：本地缓存（最新一份）在前，环境变量里的在后。"""
+    out = []
+    entry = load_token_store()["accounts"].get(account.get("_key") or "")
+    if isinstance(entry, dict) and entry.get("refresh"):
+        out.append(str(entry["refresh"]).strip())
+    if account.get("refresh"):
+        out.append(str(account["refresh"]).strip())
+    seen = set()
+    result = []
+    for item in out:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def refresh_account(account):
+    """用 refresh_token 换新 access；refresh 轮换时一并落盘。"""
+    candidates = refresh_candidates(account)
+    if not candidates:
+        raise AuthExpired("没有 refresh_token，无法自动续期；请用 raccoon_login.py 重新登录")
+    last_error = None
+    for refresh in candidates:
+        response = request("POST", ORIGIN + REFRESH_PATH,
+                           headers={"Content-Type": "application/json", "Accept": "application/json"},
+                           body={"refresh_token": refresh}, timeout=20, retries=2)
+        payload = json_of(response)
+        code = payload.get("code")
+        if response.status_code in (401, 403) or code == 200003:
+            last_error = AuthExpired("refresh_token 已失效，请用 raccoon_login.py 重新登录")
+            continue
+        if response.status_code != 200 or code not in (0, None):
+            message = first_text(payload.get("message"), payload.get("details"), payload.get("msg")) \
+                or ("HTTP %s" % response.status_code)
+            raise RuntimeError("续期失败：%s" % message)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        access = first_text(data.get("access_token"))
+        if not access:
+            raise RuntimeError("续期响应缺少 access_token")
+        new_refresh = first_text(data.get("refresh_token")) or refresh
+        account["token"] = access
+        account["refresh"] = new_refresh
+        state = load_token_store()
+        state["accounts"][account.get("_key") or account_state_key(access)] = {
+            "access": access,
+            "refresh": new_refresh,
+            "updated": int(time.time() * 1000),
+        }
+        save_token_store(state)
+        log("   🔄 登录态已续期（access 2~3 小时有效，refresh 已滚动保存）")
+        return True
+    raise last_error or RuntimeError("续期失败")
+
+
+def ensure_token_fresh(account):
+    """临期（5 分钟内）主动续期；已过期且无 RT 时直接报失效。"""
+    exp = jwt_exp(account.get("token") or "")
+    if not exp:
+        return
+    if exp - time.time() > REFRESH_LEAD_SECONDS:
+        return
+    if account.get("refresh") or load_token_store()["accounts"].get(account.get("_key") or ""):
+        refresh_account(account)
+    elif exp <= time.time():
+        raise AuthExpired("access_token 已过期（约 2~3 小时有效），请用 raccoon_login.py 重新登录")
+
+
+def call_with_auth(account, fn):
+    """先做临期续期；遇到 401/200003 时用 refresh_token 续期并重试一次。"""
+    ensure_token_fresh(account)
+    try:
+        return fn(account)
+    except AuthExpired:
+        refresh_account(account)
+        return fn(account)
 
 
 def load_onboarding_state():
@@ -383,11 +541,12 @@ def grant_login_points(token, mobile=False):
     headers = mobile_headers(token) if mobile else desktop_headers(token)
     path = MOBILE_GRANT_PATH if mobile else GRANT_PATH
     response = request("POST", ORIGIN + path, headers=headers, body={}, timeout=20, retries=1)
-    if response.status_code == 401:
-        raise RuntimeError("登录状态失效，重新登录一下吧该账号")
+    payload = json_of(response)
+    if response.status_code in (401, 403) or payload.get("code") == 200003:
+        raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
     if response.status_code != 200:
         raise RuntimeError("登录奖励接口返回 HTTP %s" % response.status_code)
-    return unwrap_api(json_of(response))
+    return unwrap_api(payload)
 
 
 def claim_onboarding(account):
@@ -403,7 +562,7 @@ def claim_onboarding(account):
         if ledger.get(task["key"]):
             continue
         try:
-            data = grant_login_points(account["token"], mobile=task["mobile"])
+            data = call_with_auth(account, lambda acc, m=task["mobile"]: grant_login_points(acc["token"], mobile=m))
         except Exception as error:
             messages.append("%s领取失败（%s）" % (task["title"], error))
             continue
@@ -446,13 +605,18 @@ def main():
 
     accounts = parse_accounts(os.environ.get("RACCOON_TOKENS", ""))
     if not accounts:
-        log("❌ 未配置 RACCOON_TOKENS（多条用换行或 & 分隔；每条: token 或 备注|token）")
+        log("❌ 未配置 RACCOON_TOKENS（每条: token / 备注|token / 备注|token|refresh_token）")
         return
 
     log("╔════════════════════════════════════╗")
     log("║ 🐻 小浣熊 每日签到                 ║")
     log("╚════════════════════════════════════╝")
     log("👥 账号数: %d  站点: %s" % (len(accounts), ORIGIN))
+    with_rt = sum(1 for account in accounts if account.get("refresh"))
+    if with_rt:
+        log("🔁 refresh_token 自动续期: %d/%d 个账号已启用" % (with_rt, len(accounts)))
+    else:
+        log("ℹ️ 未带 refresh_token：access 约 2~3 小时有效，过期后需用 raccoon_login.py 重新登录")
 
     report = []
     for index, account in enumerate(accounts, 1):
