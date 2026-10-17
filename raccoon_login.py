@@ -11,6 +11,7 @@
   python raccoon_login.py --note 主号     # 指定备注名
   python raccoon_login.py --no-verify     # 跳过登录后校验
   python raccoon_login.py --web           # 旧版网页授权（粘贴 office-raccoon:// 回调）
+  python raccoon_login.py --auth-file [路径]  # 导入桌面客户端 auth.json（默认 ~/.box-agent/config/auth.json）
 
 输出（直接作为 RACCOON_TOKENS 的一行）:
   备注|token|refresh_token      # 上游下发 refresh_token 时（推荐）
@@ -28,6 +29,7 @@
 依赖：requests（二维码显示另需可选的 qrcode）。
 """
 import os
+import json
 import sys
 import time
 import urllib.parse
@@ -60,6 +62,7 @@ CALLBACK_HOST = "auth"
 CALLBACK_PATH = "/callback"
 CLIENT_PLATFORM = "desktop-windows"
 CLIENT_VERSION = "v1.0.35"
+DEFAULT_AUTH_FILE = os.path.join(os.path.expanduser("~"), ".box-agent", "config", "auth.json")
 POLL_INTERVAL = 2.0
 LOGIN_TIMEOUT = 300.0
 
@@ -287,12 +290,27 @@ def verify(token):
     return False
 
 
+def login_from_auth_file(path):
+    """从桌面客户端 auth.json 导入登录态（与面板「导入凭证文件」同源）。"""
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise RuntimeError("auth.json 不是 JSON 对象")
+    token = first_text(data.get("access_token"), data.get("accessToken"))
+    refresh = first_text(data.get("refresh_token"), data.get("refreshToken"))
+    if not token:
+        raise RuntimeError("auth.json 里没有 access_token")
+    return {"token": token, "refresh_token": refresh}
+
+
 def main():
     args = sys.argv[1:]
     do_verify = "--no-verify" not in args
     use_web = "--web" in args
+    use_auth_file = "--auth-file" in args
     note = ""
     png_path = ""
+    auth_file = ""
     if "--note" in args:
         try:
             note = args[args.index("--note") + 1]
@@ -303,12 +321,23 @@ def main():
             png_path = args[args.index("--png") + 1]
         except Exception:
             png_path = ""
+    if use_auth_file:
+        try:
+            auth_file = args[args.index("--auth-file") + 1]
+        except Exception:
+            auth_file = ""
+        if not auth_file or auth_file.startswith("--"):
+            auth_file = DEFAULT_AUTH_FILE
 
     print("╔══════════════════════════════════════════╗")
-    print("║ 🐻 小浣熊 登录工具（微信扫码）           ║")
+    print("║ 🐻 小浣熊 登录工具（扫码 / auth.json）   ║")
     print("╚══════════════════════════════════════════╝")
 
-    credentials = web_login() if use_web else qr_login(png_path)
+    if use_auth_file:
+        credentials = login_from_auth_file(auth_file)
+        log("✅ 已从 auth.json 导入登录态")
+    else:
+        credentials = web_login() if use_web else qr_login(png_path)
     log("✅ 登录成功  token=%s" % mask(credentials["token"]))
     if do_verify:
         verify(credentials["token"])

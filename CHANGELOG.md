@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.0.4（2026-10-17）
+
+- 新增：登录工具支持 `--auth-file` 导入桌面客户端 `auth.json`（`access_token` / `refresh_token`），与扫码登录二选一；默认读取 `~/.box-agent/config/auth.json`。
+- 对齐上游 v3.0.8 的凭证文件导入能力（小浣熊 / CatPaw auth.json 导入）。
+
 ## v1.0.3（2026-10-16）
 
 - 适配小浣熊**新版登录**（官方客户端 v1.0.35）：登录工具默认改为**微信扫码**（本地生成 code → 商汤落地页 → `login_with_qrcode_code` 轮询换取登录态），旧版网页授权保留为 `--web`。
