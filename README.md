@@ -80,10 +80,10 @@
 ```bash
 python raccoon_login.py            # 微信扫码（推荐）
 python raccoon_login.py --web      # 旧版网页授权（粘贴回调地址）
-python raccoon_login.py --auth-file  # 导入桌面客户端 auth.json（默认 ~/.box-agent/config/auth.json）
+python raccoon_login.py --auth-file  # 导入桌面客户端 auth.json（自动探测新旧路径）
 ```
 
-- **导入桌面端 auth.json**：客户端登录过即可，读取其中的 `access_token` / `refresh_token`，不弹二维码（也可在参数后传自己的路径）。
+- **导入桌面端 auth.json**：客户端登录过即可，读取其中的 `access_token` / `refresh_token`，不弹二维码（也可在参数后传自己的路径）。自动按顺序探测 `~/.office-raccoon/agent/config/auth.json`（新版客户端）、`~/.box-agent/config/auth.json`（旧版客户端）、`%LOCALAPPDATA%` / `%APPDATA%` 下的 `office-raccoon\agent\config\auth.json`。
 - **扫码模式**：终端会显示二维码（需可选依赖 `pip install qrcode`），用微信扫一扫登录「商汤小浣熊」；也可以在命令后加 `--png qr.png` 把二维码存成图片再扫。
 - **成功后输出一行 `备注|token|refresh_token`**，整行填进 `RACCOON_TOKENS` 即可 —— 带 `refresh_token` 才会自动续期（access 约 2~3 小时有效；refresh 约 30 天且会轮换，脚本自动落盘）。
 

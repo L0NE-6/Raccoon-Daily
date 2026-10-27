@@ -11,7 +11,9 @@
   python raccoon_login.py --note 主号     # 指定备注名
   python raccoon_login.py --no-verify     # 跳过登录后校验
   python raccoon_login.py --web           # 旧版网页授权（粘贴 office-raccoon:// 回调）
-  python raccoon_login.py --auth-file [路径]  # 导入桌面客户端 auth.json（默认 ~/.box-agent/config/auth.json）
+  python raccoon_login.py --auth-file [路径]  # 导入桌面客户端 auth.json
+                                          # 默认自动探测 ~/.office-raccoon/agent/config/auth.json（新版）
+                                          # 及 ~/.box-agent/config/auth.json（旧版）
 
 输出（直接作为 RACCOON_TOKENS 的一行）:
   备注|token|refresh_token      # 上游下发 refresh_token 时（推荐）
@@ -62,7 +64,13 @@ CALLBACK_HOST = "auth"
 CALLBACK_PATH = "/callback"
 CLIENT_PLATFORM = "desktop-windows"
 CLIENT_VERSION = "v1.0.35"
-DEFAULT_AUTH_FILE = os.path.join(os.path.expanduser("~"), ".box-agent", "config", "auth.json")
+AUTH_FILENAME = "auth.json"
+# 新版桌面客户端把配置迁到 ~/.office-raccoon/agent/config/；
+# 旧版 ~/.box-agent/config/ 继续兼容扫描，见 auth_file_candidates()。
+DEFAULT_AUTH_DIR = os.path.join(os.path.expanduser("~"), ".office-raccoon", "agent", "config")
+LEGACY_AUTH_DIR = os.path.join(os.path.expanduser("~"), ".box-agent", "config")
+DEFAULT_AUTH_FILE = os.path.join(DEFAULT_AUTH_DIR, AUTH_FILENAME)
+LEGACY_AUTH_FILE = os.path.join(LEGACY_AUTH_DIR, AUTH_FILENAME)
 POLL_INTERVAL = 2.0
 LOGIN_TIMEOUT = 300.0
 
@@ -290,9 +298,43 @@ def verify(token):
     return False
 
 
+def auth_file_candidates():
+    """桌面客户端 auth.json 的可选路径，按优先级排列（新版在前，旧版兜底）。"""
+    paths = [
+        DEFAULT_AUTH_FILE,
+        LEGACY_AUTH_FILE,
+    ]
+    for name in ("LOCALAPPDATA", "APPDATA"):
+        base = (os.environ.get(name) or "").strip()
+        if base:
+            paths.append(os.path.join(base, "office-raccoon", "agent", "config", AUTH_FILENAME))
+    deduped = []
+    for path in paths:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def resolve_auth_file(path=""):
+    """显式路径优先；未指定时返回第一个存在的 auth.json，全都不存在则报错并列出候选。"""
+    if path:
+        return path
+    for candidate in auth_file_candidates():
+        if os.path.isfile(candidate):
+            return candidate
+    raise RuntimeError(
+        "未找到桌面客户端 auth.json，已尝试：\n  "
+        + "\n  ".join(auth_file_candidates())
+        + "\n请确认客户端已登录，或用 --auth-file <路径> 手动指定"
+    )
+
+
 def login_from_auth_file(path):
     """从桌面客户端 auth.json 导入登录态（与面板「导入凭证文件」同源）。"""
-    with open(path, "r", encoding="utf-8") as handle:
+    if not os.path.isfile(path):
+        raise RuntimeError("auth.json 不存在：%s" % path)
+    # utf-8-sig：兼容 Windows 下带 BOM 的 JSON（记事本/PowerShell 另存常见）
+    with open(path, "r", encoding="utf-8-sig") as handle:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise RuntimeError("auth.json 不是 JSON 对象")
@@ -326,8 +368,9 @@ def main():
             auth_file = args[args.index("--auth-file") + 1]
         except Exception:
             auth_file = ""
-        if not auth_file or auth_file.startswith("--"):
-            auth_file = DEFAULT_AUTH_FILE
+        if auth_file.startswith("--"):
+            auth_file = ""
+        auth_file = resolve_auth_file(auth_file)
 
     print("╔══════════════════════════════════════════╗")
     print("║ 🐻 小浣熊 登录工具（扫码 / auth.json）   ║")
@@ -335,7 +378,7 @@ def main():
 
     if use_auth_file:
         credentials = login_from_auth_file(auth_file)
-        log("✅ 已从 auth.json 导入登录态")
+        log("✅ 已从 auth.json 导入登录态（%s）" % auth_file)
     else:
         credentials = web_login() if use_web else qr_login(png_path)
     log("✅ 登录成功  token=%s" % mask(credentials["token"]))

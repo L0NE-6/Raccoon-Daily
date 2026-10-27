@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.0.5（2026-10-28）
+
+- 修复：桌面客户端新版把配置目录迁到 `%USERPROFILE%\.office-raccoon\agent\config\`，`--auth-file` 默认路径随之更新；旧版 `~/.box-agent/config/auth.json` 与 `%LOCALAPPDATA%` / `%APPDATA%` 下的配置继续自动探测，找不到时列出全部候选路径并提示手动指定（issue #1）。
+- 参照上游 `wicm84266964/Buddy2api` v2.2.12 的路径迁移处理（新旧目录同时扫描）。
+
 ## v1.0.4（2026-10-17）
 
 - 新增：登录工具支持 `--auth-file` 导入桌面客户端 `auth.json`（`access_token` / `refresh_token`），与扫码登录二选一；默认读取 `~/.box-agent/config/auth.json`。
