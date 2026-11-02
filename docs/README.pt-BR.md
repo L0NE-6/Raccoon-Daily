@@ -65,6 +65,10 @@ Use `--query` para consultar, `--skip-onboarding` para ignorar bônus iniciais, 
 
 Nunca envie tokens, caches ou arquivos de estado ao Git. Use variáveis de ambiente ou GitHub Secrets criptografados e não publique credenciais em Issues.
 
+## Limites de uso e redistribuição
+
+O repositório oficial, scripts, documentação e Releases são gratuitos. Não os repackage como recursos pagos, remova a atribuição, personifique o autor, use a identidade ou os QR codes do autor como endosso, nem reposte o projeto em contas ou grupos não relacionados para desviar tráfego. Consulte o [Aviso de uso e redistribuição](../NOTICE.md). Violações podem resultar em pedidos de remoção; o autor pode pausar atualizações, arquivar ou excluir o repositório.
+
 ## Links
 
 - [Releases](https://github.com/L0NE-6/Raccoon-Daily/releases)
