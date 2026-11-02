@@ -1,20 +1,37 @@
 <div align="center">
 
+<sub><strong>L0NE-6 · DAILY SIGNAL</strong></sub>
+
 # 🐻 Raccoon Daily
 
 **小浣熊每日积分 · 微信扫码登录 · 单文件青龙脚本 · 多账号**
 
-<img src="https://img.shields.io/github/v/release/L0NE-6/Raccoon-Daily?style=flat-square&label=Release&color=2ea44f" />
-<img src="https://img.shields.io/github/stars/L0NE-6/Raccoon-Daily?style=flat-square&label=Stars&color=FFC75F" />
-<img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white" />
-<img src="https://img.shields.io/badge/%E9%9D%92%E9%BE%99%E9%9D%A2%E6%9D%BF-%E5%8D%95%E6%96%87%E4%BB%B6%E8%BF%90%E8%A1%8C-4EAA25?style=flat-square" />
-<img src="https://img.shields.io/badge/GitHub%20Actions-%E6%94%AF%E6%8C%81-2088FF?style=flat-square&logo=githubactions&logoColor=white" />
-<img src="https://img.shields.io/badge/%E5%A4%9A%E8%B4%A6%E5%8F%B7-%E6%8D%A2%E8%A1%8C%E6%88%96%20%26%20%E5%88%86%E9%9A%94-8957E5?style=flat-square" />
-<img src="https://img.shields.io/badge/License-MIT-F472B6?style=flat-square" />
+[简体中文](README.md) · [English](docs/README.en.md) · [繁體中文](docs/README.zh-Hant.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md) · [Português (BR)](docs/README.pt-BR.md)
+
+<img src="https://img.shields.io/github/v/release/L0NE-6/Raccoon-Daily?style=for-the-badge&label=Release&color=2ea44f&logo=github" />
+<img src="https://img.shields.io/github/stars/L0NE-6/Raccoon-Daily?style=for-the-badge&label=Stars&color=FFC75F&logo=github" />
+<img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+<img src="https://img.shields.io/badge/Deploy-%E9%9D%92%E9%BE%99%20%7C%20GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white" />
+<img src="https://img.shields.io/badge/Multi--Account-supported-8957E5?style=for-the-badge&logo=files&logoColor=white" />
+<img src="https://img.shields.io/badge/License-MIT-F472B6?style=for-the-badge" />
+<a href="https://github.com/L0NE-6/Raccoon-Daily/releases"><img src="https://img.shields.io/badge/%E2%AC%87%20Download-Releases-2ea44f?style=for-the-badge&logo=github" /></a>
+
+[✨ 速览](#-30-秒速览) · [🔑 获取 Token](#-获取-token) · [🚀 青龙部署](#-部署方式一青龙面板三步) · [☁️ Actions](#-部署方式二github-actions可选默认手动触发) · [🧩 变量](#-环境变量支持多账号) · [❓ FAQ](#-常见问题) · [✦ 星轨](#-星轨-star-trail)
 
 </div>
 
 ---
+
+## ✨ 30 秒速览
+
+| 维度 | 说明 |
+| :--- | :--- |
+| **做什么** | 领取小浣熊每日积分，核对账单入账，并补领首次电脑端 / 手机端登录奖励。 |
+| **输入** | `RACCOON_TOKENS`，推荐格式 `备注\|token\|refresh_token`。 |
+| **输出** | 今日积分入账结果、新手奖励状态、分账号日志和可选推送。 |
+| **部署** | 青龙面板、本地定时任务、GitHub Actions。 |
+| **依赖** | Python 3.8+；主流程仅需 `requests`，扫码模式可选 `qrcode`。 |
+| **成功判据** | 以账单中真实出现今日入账为准，同时用本机台账避免重复领取。 |
 
 ## ✨ 这是什么
 
@@ -184,6 +201,20 @@ Raccoon-Daily/
 
 ---
 
+## ✦ 星轨 Star Trail
+
+> 稳定签到不是热闹的爆发，而是每天准时亮起的一盏灯。谢谢每一位用 Star 留下轨迹的人。
+
+<a href="https://star-history.com/#L0NE-6/Raccoon-Daily&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=L0NE-6/Raccoon-Daily&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=L0NE-6/Raccoon-Daily&type=Date" />
+    <img alt="Raccoon Daily Star Trail" src="https://api.star-history.com/svg?repos=L0NE-6/Raccoon-Daily&type=Date" />
+  </picture>
+</a>
+
+---
+
 <div align="center">
-  <sub>🐻 如果这个脚本帮到你，点个 <b>Star</b> 支持一下，或者到 <a href="#-支持与投喂">支持与投喂</a> 请我喝杯咖啡 ✨</sub>
+  <sub>L0NE-6 · DAILY SIGNAL &nbsp;|&nbsp; 点个 <b>Star</b>，让每日轨迹继续向前 ✨</sub>
 </div>
