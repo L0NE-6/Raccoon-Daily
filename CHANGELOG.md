@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.0.6（2026-11-04）
+
+- 对齐官方小浣熊客户端 `1.1.5` 请求头：桌面端增加 `X-Client-Name: raccoon-work`，并同步 `X-Client-Platform` 与 `X-Client-Version: v1.1.5`。
+- 新增可选 `RACCOON_TOKENS` 第四段 `office_identity`：仅从登录工具产出的可信凭据字段解析；个人身份或空值不发送 `X-Org-Code`，组织身份条件发送，日志不输出组织码明文。
+- 登录工具会从 `auth.json`、扫码或网页授权响应中保留 `office_identity`，并输出四段凭据；原有 `token`、`备注|token`、`备注|token|refresh_token` 格式继续兼容。
+- 新增 13 项回归测试，覆盖个人/组织条件头、官方版本头、空/畸形组织字段、登录凭据透传，以及首次电脑端 / 手机端奖励防重。
+- 说明：本次验证基于协议证据与本地单元测试，尚未使用真实账号完成线上回读验证。
+
 ## v1.0.5（2026-10-28）
 
 - 修复：桌面客户端新版把配置目录迁到 `%USERPROFILE%\.office-raccoon\agent\config\`，`--auth-file` 默认路径随之更新；旧版 `~/.box-agent/config/auth.json` 与 `%LOCALAPPDATA%` / `%APPDATA%` 下的配置继续自动探测，找不到时列出全部候选路径并提示手动指定（issue #1）。

@@ -43,7 +43,7 @@
 | 维度 | 说明 |
 | :--- | :--- |
 | **做什么** | 领取小浣熊每日积分，核对账单入账，并补领首次电脑端 / 手机端登录奖励。 |
-| **输入** | `RACCOON_TOKENS`，推荐格式 `备注\|token\|refresh_token`。 |
+| **输入** | `RACCOON_TOKENS`；个人账号推荐 `备注\|token\|refresh_token`，组织账号可使用 `备注\|token\|refresh_token\|office_identity`。 |
 | **输出** | 今日积分入账结果、新手奖励状态、分账号日志和可选推送。 |
 | **部署** | 青龙面板、本地定时任务、GitHub Actions。 |
 | **依赖** | Python 3.8+；主流程仅需 `requests`，扫码模式可选 `qrcode`。 |
@@ -116,9 +116,9 @@ python raccoon_login.py --web      # 旧版网页授权（粘贴回调地址）
 python raccoon_login.py --auth-file  # 导入桌面客户端 auth.json（自动探测新旧路径）
 ```
 
-- **导入桌面端 auth.json**：客户端登录过即可，读取其中的 `access_token` / `refresh_token`，不弹二维码（也可在参数后传自己的路径）。自动按顺序探测 `~/.office-raccoon/agent/config/auth.json`（新版客户端）、`~/.box-agent/config/auth.json`（旧版客户端）、`%LOCALAPPDATA%` / `%APPDATA%` 下的 `office-raccoon\agent\config\auth.json`。
+- **导入桌面端 auth.json**：客户端登录过即可，读取其中的 `access_token` / `refresh_token`，并在存在时保留 `officeIdentity` / `office_identity`，不弹二维码（也可在参数后传自己的路径）。自动按顺序探测 `~/.office-raccoon/agent/config/auth.json`（新版客户端）、`~/.box-agent/config/auth.json`（旧版客户端）、`%LOCALAPPDATA%` / `%APPDATA%` 下的 `office-raccoon\agent\config\auth.json`。
 - **扫码模式**：终端会显示二维码（需可选依赖 `pip install qrcode`），用微信扫一扫登录「商汤小浣熊」；也可以在命令后加 `--png qr.png` 把二维码存成图片再扫。
-- **成功后输出一行 `备注|token|refresh_token`**，整行填进 `RACCOON_TOKENS` 即可 —— 带 `refresh_token` 才会自动续期（access 约 2~3 小时有效；refresh 约 30 天且会轮换，脚本自动落盘）。
+- **成功后输出一行凭据**：个人账号通常为 `备注|token|refresh_token`；组织账号为 `备注|token|refresh_token|office_identity`。若没有 `refresh_token` 但带有组织身份，则输出 `备注|token||office_identity`（第三段留空）。整行填进 `RACCOON_TOKENS` 即可；带 `refresh_token` 才会自动续期（access 约 2~3 小时有效；refresh 约 30 天且会轮换，脚本自动落盘）。
 
 > **旧版网页授权（`--web`）**：浏览器登录后把跳转到的 `office-raccoon://auth/callback?...` 完整地址粘贴回终端（若提示无法打开协议，直接复制地址栏即可）。
 
@@ -126,11 +126,21 @@ python raccoon_login.py --auth-file  # 导入桌面客户端 auth.json（自动�
 
 > 多账号用 **换行** 或 **`&`** 分隔，两种可以混用。`|` 是单条账号内部的字段分隔符，备注里不要再写 `|`。
 
+```text
+# 个人账号
+主号|TOKEN|REFRESH_TOKEN
+
+# 组织账号：office_identity 由登录工具输出，不要从备注或 Token 文本中猜测
+团队号|TOKEN|REFRESH_TOKEN|OFFICE_IDENTITY
+```
+
 | 环境变量 | 单条格式 | 说明 |
 |---|---|---|
 | `RACCOON_STATE_FILE` | 文件路径（可选） | 新手奖励台账，默认脚本同目录 `raccoon_onboarding.json` |
 | `RACCOON_TOKEN_FILE` | 文件路径（可选） | 续期缓存，默认脚本同目录 `raccoon_tokens.json` |
-| `RACCOON_TOKENS` | `token` / `备注\|token` / `备注\|token\|refresh_token` | 多账号换行或 `&`；**带 refresh_token 才能自动续期** |
+| `RACCOON_TOKENS` | `token` / `备注\|token` / `备注\|token\|refresh_token` / `备注\|token\|refresh_token\|office_identity` | 多账号换行或 `&`；第四段为可选组织身份，**带 refresh_token 才能自动续期** |
+
+旧的一段、两段、三段格式继续兼容；第四段不带时按个人身份处理，不会发送 `X-Org-Code`。组织身份只从登录工具产出的 `officeIdentity` / `office_identity` 可信字段读取。
 
 ## ⌨️ 命令行参数
 
@@ -144,7 +154,7 @@ python raccoon_login.py --auth-file  # 导入桌面客户端 auth.json（自动�
 ## 📊 运行效果示例
 
 ```text
-[08:30:01] 👤 [1] 主号  token=eyJhbGci****abcd
+[08:30:01] 👤 [1] 主号  token=eyJhbGci****abcd  身份=个人
 [08:30:03]    ✅ 今日积分 +100（每日登录+100）
 [08:30:04] 账号1 主号: ✅ 今日积分 +100（每日登录+100）
 ```
@@ -180,7 +190,8 @@ Raccoon-Daily/
 
 ## 📦 版本与发布
 
-- 每次更新单独发一个 Release：`v1.0.0` → `v1.0.1` …，历史版本保留可下载。
+- 当前发布版：`v1.0.6`（2026-11-04）。
+- 每次更新单独发一个 Release：`v1.0.0` → `v1.0.1` … → `v1.0.6`，历史版本保留可下载。
 - 每个 Release 附带：完整包 zip + 各脚本单文件 + `SHA256SUMS.txt`。
 - 下载页：<https://github.com/L0NE-6/Raccoon-Daily/releases>
 

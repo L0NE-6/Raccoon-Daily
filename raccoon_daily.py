@@ -17,6 +17,7 @@
        token
        备注|token
        备注|token|refresh_token   ← 推荐；access 只活 2~3 小时，带 RT 才能自动续期
+       备注|token|refresh_token|office_identity   ← 组织账号可附带显式组织身份
      token 为 xiaohuanxiong.com 的登录 JWT（带不带 Bearer 前缀都行）
    RACCOON_TOKEN_FILE   可选，续期缓存文件路径（默认脚本同目录 raccoon_tokens.json）
    RACCOON_STATE_FILE   可选，新手奖励台账文件路径（默认脚本同目录）
@@ -57,9 +58,12 @@ MOBILE_GRANT_PATH = "/api/web/mobile/v1/login/points/grant"
 SETTINGS_PATH = "/api/web/office/v3/setting_info"
 BILLS_PATH = "/api/web/points/v1/bills?paging.limit=20&paging.offset=0"
 REFRESH_PATH = "/api/web/auth/v1/refresh"
-CLIENT_VERSION = "v1.0.35"
+CLIENT_NAME = "raccoon-work"
+CLIENT_PLATFORM = "desktop-windows"
+CLIENT_VERSION = "v1.1.5"
 REFRESH_LEAD_SECONDS = 300
 TOKEN_STORE_NAME = "raccoon_tokens.json"
+ORG_IDENTITY_FIELDS = ("officeIdentity", "office_identity")
 
 ONLY = None
 QUERY_ONLY = False
@@ -110,6 +114,25 @@ def first_text(*values):
     return ""
 
 
+def credential_org_code(credentials):
+    """Read an explicit organization identity from credential fields only."""
+    if not isinstance(credentials, dict):
+        return ""
+    value = first_text(*(credentials.get(key) for key in ORG_IDENTITY_FIELDS))
+    if not value or value == "personal":
+        return ""
+    if not value.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("小浣熊组织身份格式无效，请重新导入登录态")
+    return value
+
+
+def account_identity_label(credentials):
+    try:
+        return "组织" if credential_org_code(credentials) else "个人"
+    except ValueError:
+        return "组织字段异常"
+
+
 def request(method, url, headers=None, body=None, timeout=20, retries=3):
     last = None
     for attempt in range(retries):
@@ -133,21 +156,26 @@ def json_of(response):
         return {}
 
 
-def desktop_headers(token):
-    return {
+def desktop_headers(token, credentials=None):
+    headers = {
         "Authorization": "Bearer %s" % strip_bearer(token),
-        "X-Client-Platform": "desktop-windows",
+        "X-Client-Name": CLIENT_NAME,
+        "X-Client-Platform": CLIENT_PLATFORM,
         "X-Client-Version": CLIENT_VERSION,
         "Accept": "application/json",
     }
+    org_code = credential_org_code(credentials)
+    if org_code:
+        headers["X-Org-Code"] = org_code
+    return headers
 
 
 # ---------- 上游协议 ----------
 
 
-def trigger_daily(token):
+def trigger_daily(token, credentials=None):
     """GET setting_info 触发服务端按天发放；返回发放弹窗/提示原文。"""
-    headers = desktop_headers(token)
+    headers = desktop_headers(token, credentials)
     headers["X-Raccoon-Language"] = "zh"
     response = request("GET", ORIGIN + SETTINGS_PATH, headers=headers)
     payload = json_of(response)
@@ -162,9 +190,10 @@ def trigger_daily(token):
     }
 
 
-def bills_today(token):
+def bills_today(token, credentials=None):
     """拉账单，汇总本地今天且 points>0 的入账。"""
-    response = request("GET", ORIGIN + BILLS_PATH, headers=desktop_headers(token), timeout=30)
+    response = request("GET", ORIGIN + BILLS_PATH,
+                       headers=desktop_headers(token, credentials), timeout=30)
     payload = json_of(response)
     if response.status_code in (401, 403) or payload.get("code") == 200003:
         raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
@@ -193,11 +222,12 @@ def bills_today(token):
 def do_checkin(account):
     settings = {}
     if not QUERY_ONLY:
-        settings = call_with_auth(account, lambda acc: trigger_daily(acc["token"]))
+        settings = call_with_auth(
+            account, lambda acc: trigger_daily(acc["token"], acc))
         if settings.get("toast") or settings.get("popups"):
             log("   🎁 上游发放提示: %s" % json.dumps(settings, ensure_ascii=False)[:160])
 
-    grants = call_with_auth(account, lambda acc: bills_today(acc["token"]))
+    grants = call_with_auth(account, lambda acc: bills_today(acc["token"], acc))
     total = sum(item["points"] for item in grants)
     parts = []
     if total > 0:
@@ -316,7 +346,10 @@ def parse_accounts(raw):
     accounts = []
     for index, line in enumerate(split_accounts(raw), 1):
         parts = [part.strip() for part in line.split("|")]
-        if len(parts) >= 3:
+        office_identity = ""
+        if len(parts) >= 4:
+            note, token, refresh, office_identity = parts[:4]
+        elif len(parts) == 3:
             note, token, refresh = parts[0], parts[1], parts[2]
         elif len(parts) == 2:
             note, token, refresh = parts[0], parts[1], ""
@@ -325,7 +358,8 @@ def parse_accounts(raw):
         token = strip_bearer(token)
         if token:
             account = {"note": note or ("账号%d" % index), "token": token,
-                       "refresh": strip_bearer(refresh)}
+                       "refresh": strip_bearer(refresh),
+                       "office_identity": office_identity}
             account["_key"] = account_store_key(account, index)
             accounts.append(account)
     return accounts
@@ -527,18 +561,23 @@ def save_onboarding_state(state):
         return False
 
 
-def mobile_headers(token):
-    return {
+def mobile_headers(token, credentials=None):
+    headers = {
         "Authorization": "Bearer %s" % strip_bearer(token),
         "X-Client-Platform": "app-android",
         "X-Client-Version": "v1.0.3",
         "Accept": "application/json",
     }
+    org_code = credential_org_code(credentials)
+    if org_code:
+        headers["X-Org-Code"] = org_code
+    return headers
 
 
-def grant_login_points(token, mobile=False):
+def grant_login_points(token, mobile=False, credentials=None):
     """打一次首登奖励端点（幂等）；两端只差客户端身份头与路径。"""
-    headers = mobile_headers(token) if mobile else desktop_headers(token)
+    headers = (mobile_headers(token, credentials) if mobile
+               else desktop_headers(token, credentials))
     path = MOBILE_GRANT_PATH if mobile else GRANT_PATH
     response = request("POST", ORIGIN + path, headers=headers, body={}, timeout=20, retries=1)
     payload = json_of(response)
@@ -562,7 +601,11 @@ def claim_onboarding(account):
         if ledger.get(task["key"]):
             continue
         try:
-            data = call_with_auth(account, lambda acc, m=task["mobile"]: grant_login_points(acc["token"], mobile=m))
+            data = call_with_auth(
+                account,
+                lambda acc, m=task["mobile"]: grant_login_points(
+                    acc["token"], mobile=m, credentials=acc),
+            )
         except Exception as error:
             messages.append("%s领取失败（%s）" % (task["title"], error))
             continue
@@ -622,7 +665,9 @@ def main():
     for index, account in enumerate(accounts, 1):
         if ONLY and index != ONLY:
             continue
-        log("👤 [%d] %s  token=%s" % (index, account["note"], mask(account["token"])))
+        log("👤 [%d] %s  token=%s  身份=%s" % (
+            index, account["note"], mask(account["token"]),
+            account_identity_label(account)))
         try:
             success, message = do_checkin(account)
             log("   %s %s" % ("✅" if success else "ℹ️", message))

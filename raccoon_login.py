@@ -16,7 +16,9 @@
                                           # 及 ~/.box-agent/config/auth.json（旧版）
 
 输出（直接作为 RACCOON_TOKENS 的一行）:
+  备注|token||office_identity  # auth.json 带组织身份且没有 refresh_token 时
   备注|token|refresh_token      # 上游下发 refresh_token 时（推荐）
+  备注|token|refresh_token|office_identity  # 组织账号（组织身份来自 auth.json）
   备注|token                    # 上游没有下发 refresh_token 时
 
 说明:
@@ -63,8 +65,10 @@ CALLBACK_SCHEME = "office-raccoon"
 CALLBACK_HOST = "auth"
 CALLBACK_PATH = "/callback"
 CLIENT_PLATFORM = "desktop-windows"
-CLIENT_VERSION = "v1.0.35"
+CLIENT_NAME = "raccoon-work"
+CLIENT_VERSION = "v1.1.5"
 AUTH_FILENAME = "auth.json"
+ORG_IDENTITY_FIELDS = ("officeIdentity", "office_identity")
 # 新版桌面客户端把配置迁到 ~/.office-raccoon/agent/config/；
 # 旧版 ~/.box-agent/config/ 继续兼容扫描，见 auth_file_candidates()。
 DEFAULT_AUTH_DIR = os.path.join(os.path.expanduser("~"), ".office-raccoon", "agent", "config")
@@ -116,15 +120,31 @@ def first_text(*values):
     return ""
 
 
-def api_headers(token=None):
+def credential_org_code(credentials):
+    """Read an explicit organization identity from credential fields only."""
+    if not isinstance(credentials, dict):
+        return ""
+    value = first_text(*(credentials.get(key) for key in ORG_IDENTITY_FIELDS))
+    if not value or value == "personal":
+        return ""
+    if not value.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("小浣熊组织身份格式无效，请重新导入登录态")
+    return value
+
+
+def api_headers(token=None, credentials=None):
     headers = {
         "Accept": "application/json",
+        "X-Client-Name": CLIENT_NAME,
         "X-Client-Platform": CLIENT_PLATFORM,
         "X-Client-Version": CLIENT_VERSION,
         "X-Raccoon-Language": "zh",
     }
     if token:
         headers["Authorization"] = "Bearer %s" % token
+    org_code = credential_org_code(credentials)
+    if org_code:
+        headers["X-Org-Code"] = org_code
     return headers
 
 
@@ -183,6 +203,7 @@ def poll_qr(code):
         "status": status,
         "access": first_text(data.get("access_token")),
         "refresh": first_text(data.get("refresh_token")),
+        "office_identity": credential_org_code(data),
     }
 
 
@@ -202,7 +223,11 @@ def qr_login(png_path=None):
         state = poll_qr(code)
         status = state["status"]
         if status == "success" and state.get("access"):
-            return {"token": state["access"], "refresh_token": state.get("refresh", "")}
+            return {
+                "token": state["access"],
+                "refresh_token": state.get("refresh", ""),
+                "office_identity": state.get("office_identity", ""),
+            }
         if status == "canceled":
             code = new_qr_code()
             url = qr_url(code)
@@ -263,6 +288,7 @@ def exchange_code(code):
     return {
         "token": token,
         "refresh_token": first_text(data.get("refresh_token"), data.get("refreshToken")),
+        "office_identity": credential_org_code(data),
     }
 
 
@@ -282,10 +308,11 @@ def web_login():
     return exchange_code(code)
 
 
-def verify(token):
+def verify(credentials):
     log("🔎 校验 token ...")
     try:
-        response = request("GET", ORIGIN + SETTINGS_PATH, headers=api_headers(token))
+        response = request("GET", ORIGIN + SETTINGS_PATH,
+                           headers=api_headers(credentials["token"], credentials))
         if response.status_code == 200:
             log("✅ token 可用")
             return True
@@ -342,7 +369,11 @@ def login_from_auth_file(path):
     refresh = first_text(data.get("refresh_token"), data.get("refreshToken"))
     if not token:
         raise RuntimeError("auth.json 里没有 access_token")
-    return {"token": token, "refresh_token": refresh}
+    return {
+        "token": token,
+        "refresh_token": refresh,
+        "office_identity": credential_org_code(data),
+    }
 
 
 def main():
@@ -383,11 +414,16 @@ def main():
         credentials = web_login() if use_web else qr_login(png_path)
     log("✅ 登录成功  token=%s" % mask(credentials["token"]))
     if do_verify:
-        verify(credentials["token"])
+        verify(credentials)
 
     parts = [note or "小浣熊", credentials["token"]]
+    org_code = credential_org_code(credentials)
     if credentials.get("refresh_token"):
         parts.append(credentials["refresh_token"])
+    elif org_code:
+        parts.append("")
+    if org_code:
+        parts.append(org_code)
     env_line = "|".join(parts)
     print("\n" + "-" * 50)
     print("✅ 将下面这行追加到 RACCOON_TOKENS")
