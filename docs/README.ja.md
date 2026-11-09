@@ -14,7 +14,7 @@
 | 認証情報 | `RACCOON_TOKENS`、推奨形式は `name\|token\|refresh_token` |
 | 実行環境 | Python 3.8+、Qinglong、ローカル cron、GitHub Actions |
 | 依存関係 | `requests`、端末 QR 表示には任意で `qrcode` |
-| 成功判定 | アカウントの請求明細に本日の入金が表示されること |
+| 成功判定 | 本日の有効な `daily_grant`、または有効期限切れ・消去済みでないデイリークレジット |
 
 ## 収録スクリプト
 

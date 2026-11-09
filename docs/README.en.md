@@ -14,7 +14,7 @@
 | Credential | `RACCOON_TOKENS`, preferably `name\|token\|refresh_token` |
 | Runtime | Python 3.8+, Qinglong, local cron, or GitHub Actions |
 | Dependencies | `requests`; optional `qrcode` for terminal QR output |
-| Success check | The account bill must show today's credit entry |
+| Success check | A valid today `daily_grant`, or an unexpired and unconsumed daily grant |
 
 ## Included scripts
 

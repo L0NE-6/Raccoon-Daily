@@ -4,10 +4,11 @@
 ------------------------------------------------------------
 
 📌 功能
-   小浣熊每日积分任务（成功判据是账单核对而不是某一步 200）：
-   1. GET  /api/web/office/v3/setting_info   每日积分发放触发器（按天幂等）
-   2. GET  /api/web/points/v1/bills          拉账单，今日 points>0 才算签到成功
-      「今日」固定按北京时间（UTC+8）切日，不跟随宿主机时区
+   小浣熊每日积分任务（成功判据是可用每日积分而不是某一步 200）：
+   1. GET /api/web/auth/v1/user_info        页面访问，延期每日积分（best-effort）
+   2. GET /api/web/points/v1/balance         余额硬依赖，确认账户可用额度
+   3. GET /api/web/points/v2/bills           只认 daily_grant、到期时间与清零配对
+      「今日」和 01:30 宽限固定按北京时间（UTC+8），不跟随宿主机时区
    3. 新手任务：首次电脑端 / 手机端登录奖励（各一次性，名义 3000 积分）
       - 两条端点互不共享额度：桌面端领过的账号，手机端那条照样能领
       - 领取结果记本机台账（raccoon_onboarding.json），结算过的不再重复探测 / 提示
@@ -56,7 +57,9 @@ ORIGIN = os.environ.get("RACCOON_MAIN_SITE_URL", "").strip() or "https://xiaohua
 GRANT_PATH = "/api/web/desktop/v1/login/points/grant"
 MOBILE_GRANT_PATH = "/api/web/mobile/v1/login/points/grant"
 SETTINGS_PATH = "/api/web/office/v3/setting_info"
-BILLS_PATH = "/api/web/points/v1/bills?paging.limit=20&paging.offset=0"
+USER_INFO_PATH = "/api/web/auth/v1/user_info"
+BALANCE_PATH = "/api/web/points/v1/balance"
+BILLS_PATH = "/api/web/points/v2/bills?paging.limit=60&type=all"
 REFRESH_PATH = "/api/web/auth/v1/refresh"
 CLIENT_NAME = "raccoon-work"
 CLIENT_PLATFORM = "desktop-windows"
@@ -71,6 +74,11 @@ NO_NOTIFY = False
 ONBOARDING = True
 
 BEIJING = timezone(timedelta(hours=8))
+DAILY_GRANT = "daily_grant"
+DAILY_EXPIRE = "daily_expire"
+DAILY_FRESH_SECONDS = 90
+GRANT_GRACE_HOUR = 1
+GRANT_GRACE_MINUTE = 30
 ONBOARDING_NOMINAL_POINTS = 3000
 ONBOARDING_TASKS = (
     {"key": "desktop_login_grant", "title": "首次电脑端登录奖励",
@@ -190,8 +198,42 @@ def trigger_daily(token, credentials=None):
     }
 
 
-def bills_today(token, credentials=None):
-    """拉账单，汇总本地今天且 points>0 的入账。"""
+def visit_page(token, credentials=None):
+    """网页会话访问；每日积分登录延期依赖该接口。"""
+    headers = desktop_headers(token, credentials)
+    headers["X-Raccoon-Language"] = "zh"
+    response = request("GET", ORIGIN + USER_INFO_PATH, headers=headers)
+    payload = json_of(response)
+    if response.status_code in (401, 403) or payload.get("code") == 200003:
+        raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
+    if response.status_code != 200:
+        raise RuntimeError("user_info 返回 HTTP %s" % response.status_code)
+    code = payload.get("code")
+    if isinstance(code, int) and code not in (0, 200):
+        raise RuntimeError(payload.get("message") or payload.get("msg") or
+                           ("user_info 返回业务错误 code=%s" % code))
+    data = payload.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def account_balance(token, credentials=None):
+    """读取余额；available_points 是签到硬依赖。"""
+    response = request("GET", ORIGIN + BALANCE_PATH,
+                       headers=desktop_headers(token, credentials), timeout=30)
+    payload = json_of(response)
+    if response.status_code in (401, 403) or payload.get("code") == 200003:
+        raise AuthExpired("登录状态失效，请重新登录（或用 refresh_token 自动续期）")
+    if response.status_code != 200:
+        raise RuntimeError("余额接口返回 HTTP %s" % response.status_code)
+    data = unwrap_api(payload)
+    available = data.get("available_points")
+    if isinstance(available, bool) or not isinstance(available, (int, float)):
+        raise RuntimeError("余额响应缺少数字型 available_points")
+    return data
+
+
+def bill_items(token, credentials=None):
+    """拉最近 60 条账单，返回原始流水列表。"""
     response = request("GET", ORIGIN + BILLS_PATH,
                        headers=desktop_headers(token, credentials), timeout=30)
     payload = json_of(response)
@@ -200,48 +242,164 @@ def bills_today(token, credentials=None):
     if response.status_code != 200:
         raise RuntimeError("账单接口返回 HTTP %s" % response.status_code)
     data = unwrap_api(payload)
-    today = beijing_today()
-    grants = []
-    for item in data.get("items") or []:
-        if not isinstance(item, dict):
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("账单响应缺少列表型 items")
+    return items
+
+
+def parse_iso(value):
+    """ISO8601 → 北京时间 aware datetime；坏值返回 None。"""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BEIJING)
+    return parsed.astimezone(BEIJING)
+
+
+def positive_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
+
+
+def pick_today_grant(items, now=None):
+    """今日 daily_grant，按 CST 日期；同日多条取最大点数。"""
+    current = now or datetime.now(BEIJING)
+    today = current.astimezone(BEIJING).date()
+    best = None
+    best_points = None
+    for item in items:
+        if not isinstance(item, dict) or item.get("biz_type") != DAILY_GRANT:
             continue
-        try:
-            points = int(item.get("points") or 0)
-        except Exception:
+        points = positive_number(item.get("points"))
+        if points is None:
             continue
-        created = str(item.get("created_at") or "")
-        if points > 0 and created[:10] == today:
-            grants.append({
-                "name": item.get("event_name") or "积分发放",
-                "points": points,
-                "at": created.replace("T", " ")[11:19],
-            })
-    return grants
+        reference = parse_iso(item.get("grant_at")) or parse_iso(item.get("created_at"))
+        if reference is None or reference.date() != today:
+            continue
+        if best is None or points > best_points:
+            best, best_points = item, points
+    return best
+
+
+def grant_grace_at(now=None):
+    current = (now or datetime.now(BEIJING)).astimezone(BEIJING)
+    return current.replace(hour=GRANT_GRACE_HOUR, minute=GRANT_GRACE_MINUTE,
+                           second=0, microsecond=0)
+
+
+def grant_key(item):
+    grant = parse_iso(item.get("grant_at")) or parse_iso(item.get("created_at"))
+    day = grant.date().isoformat() if grant else ""
+    return day, float(item.get("points") or 0)
+
+
+def expired_grant_keys(items):
+    keys = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("biz_type") != DAILY_EXPIRE:
+            continue
+        points = item.get("points")
+        if isinstance(points, bool) or not isinstance(points, (int, float)):
+            continue
+        keys.add(grant_key({**item, "points": abs(points)}))
+    return keys
+
+
+def pick_active_grants(items, now=None):
+    """未过期且未被 daily_expire 消费的 daily_grant，按到期升序。"""
+    current = (now or datetime.now(BEIJING)).astimezone(BEIJING)
+    stamp = current.timestamp()
+    expired = expired_grant_keys(items)
+    active = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("biz_type") != DAILY_GRANT:
+            continue
+        points = positive_number(item.get("points"))
+        expire_at = parse_iso(item.get("expire_at"))
+        if points is None or expire_at is None or expire_at.timestamp() <= stamp:
+            continue
+        if grant_key(item) in expired:
+            continue
+        active.append(item)
+    active.sort(key=lambda item: parse_iso(item.get("expire_at")).timestamp())
+    return active
+
+
+def checkin_result(items, started, now=None):
+    """账单 → 签到结论；成功、已签、可用旧额度与 01:30 宽限分开表达。"""
+    current = (now or datetime.now(BEIJING)).astimezone(BEIJING)
+    row = pick_today_grant(items, current)
+    if row is not None:
+        points = positive_number(row.get("points"))
+        created = parse_iso(row.get("created_at"))
+        fresh = bool(created and created.timestamp() >= started - DAILY_FRESH_SECONDS)
+        expire_at = parse_iso(row.get("expire_at"))
+        return {
+            "ok": True,
+            "credit": points,
+            "already_checked_in": not fresh,
+            "retry_at": None,
+            "seal_until": None,
+            "message": "每日积分 +%g" % points,
+            "expire_at": expire_at,
+        }
+    active = pick_active_grants(items, current)
+    if active:
+        total = sum(positive_number(item.get("points")) for item in active)
+        nearest = parse_iso(active[0].get("expire_at"))
+        grace = grant_grace_at(current)
+        seal_until = int(grace.timestamp()) if current < grace else None
+        return {
+            "ok": True,
+            "credit": total,
+            "already_checked_in": True,
+            "retry_at": None,
+            "seal_until": seal_until,
+            "message": "今日额度可用 %g（本次未产生新发放，最早 %s 到期）" % (
+                total, nearest.strftime("%Y-%m-%d")),
+            "expire_at": nearest,
+        }
+    grace = grant_grace_at(current)
+    retry_at = int(grace.timestamp()) if current < grace else None
+    return {
+        "ok": False,
+        "credit": 0.0,
+        "already_checked_in": False,
+        "retry_at": retry_at,
+        "seal_until": None,
+        "message": "上游今日每日积分尚未同步；01:30 后重试" if retry_at
+        else "上游今日每日积分尚未发放",
+        "expire_at": None,
+    }
 
 
 def do_checkin(account):
-    settings = {}
+    started = time.time()
     if not QUERY_ONLY:
-        settings = call_with_auth(
-            account, lambda acc: trigger_daily(acc["token"], acc))
-        if settings.get("toast") or settings.get("popups"):
-            log("   🎁 上游发放提示: %s" % json.dumps(settings, ensure_ascii=False)[:160])
+        try:
+            call_with_auth(account, lambda acc: visit_page(acc["token"], acc))
+        except AuthExpired:
+            raise
+        except Exception as error:
+            log("   ⚠️ 页面访问失败，继续核对每日积分: %s" % error)
+        call_with_auth(account, lambda acc: account_balance(acc["token"], acc))
 
-    grants = call_with_auth(account, lambda acc: bills_today(acc["token"], acc))
-    total = sum(item["points"] for item in grants)
-    parts = []
-    if total > 0:
-        parts.append("今日积分 +%d（%s）" % (total, "，".join(
-            "%s+%d" % (item["name"], item["points"]) for item in grants[:3])))
-    else:
-        parts.append("今日未见积分入账（可能已领取）")
+    items = call_with_auth(account, lambda acc: bill_items(acc["token"], acc))
+    decision = checkin_result(items, started)
+    parts = [decision["message"]]
 
     if not QUERY_ONLY and ONBOARDING:
         try:
             parts.extend(claim_onboarding(account))
         except Exception as error:
             parts.append("新手奖励领取异常：%s" % error)
-    return total > 0, "；".join(parts)
+    return decision["ok"], "；".join(parts)
 
 
 # ---------- 推送 ----------

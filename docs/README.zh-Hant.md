@@ -14,7 +14,7 @@
 | 憑證 | `RACCOON_TOKENS`，建議格式 `備註\|token\|refresh_token` |
 | 執行環境 | Python 3.8+、青龍、本機 cron、GitHub Actions |
 | 依賴 | `requests`；終端二維碼可選 `qrcode` |
-| 成功判據 | 帳單中必須真實出現今日入帳 |
+| 成功判據 | 今日 `daily_grant`，或仍存在未過期且未被清零的每日積分 |
 
 ## 內含腳本
 

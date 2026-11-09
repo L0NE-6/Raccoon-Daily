@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.1.0（2026-11-10）
+
+- 签到流程对齐当前 Raccoon：`user_info` 页面访问 → 余额硬校验 → `bills v2` 最近 60 条核验。
+- 只认 `biz_type=daily_grant`；日期优先 `grant_at`，缺失才用 `created_at`，按 UTC+8 切日。
+- 同日多条每日积分取最大点数；`created_at` 落在本次调用前 90 秒内视为本次新到账，否则按已签到。
+- 今日没有新 `daily_grant` 时，未过期且未被 `daily_expire` 清零的旧每日积分仍可判已签，额度为所有有效条目合计。
+- `daily_expire` 按“CST 日期 + 绝对点数”与发放配对；过期、缺少 `expire_at`、点数非正或 bool 均不计入。
+- 00:00-01:29:59 账单尚未同步时不密集重试：有可用旧额度则成功并提示 01:30 再确认，无可用额度则失败并提示 01:30 后重跑。
+- 余额 `available_points` 必须为数字且非 bool；`user_info` 失败为 best-effort，不阻断余额和账单核验。
+- `--query` 只读账单，不访问 user_info 或余额，不触发奖励领取。
+- 新增签到语义、宽限边界、过期/清零、余额和账单形状回归；全套 `26` 项测试通过。
+
 ## v1.0.6（2026-11-04）
 
 - 对齐官方小浣熊客户端 `1.1.5` 请求头：桌面端增加 `X-Client-Name: raccoon-work`，并同步 `X-Client-Platform` 与 `X-Client-Version: v1.1.5`。

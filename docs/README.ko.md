@@ -14,7 +14,7 @@
 | 자격 증명 | `RACCOON_TOKENS`, 권장 형식 `name\|token\|refresh_token` |
 | 실행 환경 | Python 3.8+, Qinglong, 로컬 cron, GitHub Actions |
 | 의존성 | `requests`, 터미널 QR 표시에는 선택적으로 `qrcode` |
-| 성공 기준 | 계정 청구 내역에 오늘의 크레딧 입금이 표시되어야 함 |
+| 성공 기준 | 오늘의 유효한 `daily_grant` 또는 만료·소진되지 않은 일일 크레딧 |
 
 ## 포함 스크립트
 

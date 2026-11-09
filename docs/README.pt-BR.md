@@ -14,7 +14,7 @@
 | Credencial | `RACCOON_TOKENS`, preferencialmente `name\|token\|refresh_token` |
 | Ambiente | Python 3.8+, Qinglong, cron local ou GitHub Actions |
 | Dependências | `requests`; `qrcode` é opcional para QR no terminal |
-| Verificação | O extrato da conta deve mostrar o crédito de hoje |
+| Verificação | `daily_grant` válido de hoje, ou crédito diário não expirado e não consumido |
 
 ## Scripts
 
