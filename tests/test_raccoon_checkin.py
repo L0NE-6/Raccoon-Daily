@@ -104,7 +104,20 @@ class CheckinSemanticsTests(unittest.TestCase):
     def test_bills_endpoint_covers_more_than_twenty_rows(self):
         self.assertIn("/points/v2/bills", rc.BILLS_PATH)
         self.assertIn("paging.limit=60", rc.BILLS_PATH)
-        self.assertIn("type=all", rc.BILLS_PATH)
+        self.assertIn("type=income", rc.BILLS_PATH)
+        self.assertNotIn("type=all", rc.BILLS_PATH)
+
+    def test_income_filter_still_selects_only_daily_grant(self):
+        items = [
+            grant(points=1500, biz_type="reward_grant",
+                  grant_at=NOW.isoformat(),
+                  expire_at="2026-12-01T00:00:00+08:00"),
+            grant(points=300, biz_type="daily_grant",
+                  grant_at=NOW.isoformat(),
+                  created_at=NOW.isoformat(),
+                  expire_at="2026-11-11T23:59:59+08:00"),
+        ]
+        self.assertEqual(300, rc.pick_today_grant(items, NOW)["points"])
 
 
 class CheckinFlowTests(unittest.TestCase):
