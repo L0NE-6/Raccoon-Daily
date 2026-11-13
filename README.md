@@ -6,6 +6,8 @@
 
 **小浣熊每日积分 · 微信扫码登录 · 单文件青龙脚本 · 多账号**
 
+> 当前版本：**v1.1.1**（2026-11-10） · 最新更新：账单改用 type=income，并保留最近 60 条窗口
+
 [简体中文](README.md) · [English](docs/README.en.md) · [繁體中文](docs/README.zh-Hant.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md) · [Português (BR)](docs/README.pt-BR.md)
 
 <img src="https://img.shields.io/github/v/release/L0NE-6/Raccoon-Daily?style=for-the-badge&label=Release&color=2ea44f&logo=github" />
